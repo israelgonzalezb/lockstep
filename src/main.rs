@@ -2,6 +2,7 @@
 
 mod app;
 mod db;
+mod stack;
 
 use app::LockstepApp;
 use eframe::egui;
