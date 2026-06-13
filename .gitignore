@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# SQLite databases (local dev state)
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
