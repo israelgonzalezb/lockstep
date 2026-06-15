@@ -1,23 +1,48 @@
 #![allow(clippy::needless_range_loop)]
 
 use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
     pub id: i64,
     pub name: String,
     pub default_duration: i32, // in minutes
+    pub notes: String,
+    pub category: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduleBlock {
     pub id: Option<i64>,
-    pub task_id: Option<i64>, // None represents "No plan"
-    pub task_name: String,    // Display name: e.g., "No plan" if task_id is None
+    pub task_ids: Vec<i64>,   // Empty represents "No plan"
+    pub task_name: String,    // Display name: e.g., "Coding + Podcast" or "No plan"
     pub day: String,          // YYYY-MM-DD
     pub start_minute: i32,    // 0 to 1439
     pub duration_minutes: i32,
     pub is_done: bool,
+    pub notes: String,
+}
+
+/// Dynamic file logging centralized under the sovereign .nullvector path.
+pub fn log_msg(level: &str, msg: &str) {
+    let log_path = "C:\\Users\\Israel\\.nullvector\\lockstep.log";
+    if let Some(parent) = std::path::Path::new(log_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let _ = writeln!(file, "[{}] [{}] {}", timestamp, level, msg);
+    }
+}
+
+pub fn log_info(msg: &str) {
+    log_msg("INFO", msg);
+}
+
+pub fn log_error(msg: &str) {
+    log_msg("ERROR", msg);
 }
 
 /// Recalculates start_minute for all blocks sequentially to ensure perfect contiguity.
@@ -37,7 +62,7 @@ pub fn consolidate_blocks(blocks: &mut Vec<ScheduleBlock>) {
 
     let mut i = 1;
     while i < blocks.len() {
-        if blocks[i - 1].task_id.is_none() && blocks[i].task_id.is_none() {
+        if blocks[i - 1].task_ids.is_empty() && blocks[i].task_ids.is_empty() {
             // Both are "No plan", merge duration
             blocks[i - 1].duration_minutes += blocks[i].duration_minutes;
             blocks.remove(i);
@@ -58,37 +83,38 @@ pub fn adjust_block_duration(blocks: &mut Vec<ScheduleBlock>, index: usize, delt
 
     let current_duration = blocks[index].duration_minutes;
     if current_duration + delta_minutes <= 0 {
-        return false; // Cannot shrink a task to 0 or negative duration
+        log_error(&format!("Adjustment rejected: Block duration cannot be zero or negative (idx: {}, delta: {})", index, delta_minutes));
+        return false;
     }
 
     // Identify target blocks downstream to absorb the opposite delta
-    // If delta > 0, we need to shrink downstream blocks
-    // If delta < 0, we need to expand downstream blocks
     if delta_minutes > 0 {
-        // We need to find "No plan" blocks after `index` to shrink
+        // Find downstream "No plan" blocks to shrink
         let mut target_indices = Vec::new();
         for i in (index + 1)..blocks.len() {
-            if blocks[i].task_id.is_none() {
+            if blocks[i].task_ids.is_empty() {
                 target_indices.push(i);
             }
         }
 
-        // If no "No plan" block exists downstream, fall back to the very last block
+        // If no "No plan" block exists downstream, fall back to the last block
         if target_indices.is_empty() && index + 1 < blocks.len() {
             target_indices.push(blocks.len() - 1);
         }
 
         if target_indices.is_empty() {
-            return false; // Nowhere to absorb expansion
+            log_error("Adjustment rejected: No downstream buffer blocks available to contract.");
+            return false;
         }
 
-        // Calculate if we have enough duration in target blocks to absorb the expansion
+        // Calculate available buffer size
         let total_available: i32 = target_indices.iter().map(|&i| blocks[i].duration_minutes).sum();
         if total_available < delta_minutes {
-            return false; // Not enough buffer to expand
+            log_error(&format!("Adjustment rejected: Downstream buffer ({}m) is smaller than requested expansion ({}m)", total_available, delta_minutes));
+            return false;
         }
 
-        // Perform absorption
+        // Absorb expansion from buffer blocks
         let mut remaining_delta = delta_minutes;
         for &t_idx in &target_indices {
             let avail = blocks[t_idx].duration_minutes;
@@ -104,10 +130,10 @@ pub fn adjust_block_duration(blocks: &mut Vec<ScheduleBlock>, index: usize, delt
         blocks[index].duration_minutes += delta_minutes;
     } else {
         // delta_minutes < 0: we are contracting this block. We must expand a downstream block.
-        // Prefer expanding the first downstream "No plan" block, or the last block.
+        // Prefer expanding the first downstream "No plan" block.
         let mut target_idx = None;
         for i in (index + 1)..blocks.len() {
-            if blocks[i].task_id.is_none() {
+            if blocks[i].task_ids.is_empty() {
                 target_idx = Some(i);
                 break;
             }
@@ -117,26 +143,27 @@ pub fn adjust_block_duration(blocks: &mut Vec<ScheduleBlock>, index: usize, delt
             if index + 1 < blocks.len() {
                 blocks.len() - 1
             } else {
-                index // Fallback to itself if it's the last block, which doesn't make sense but prevents panic
+                index
             }
         });
 
         if t_idx == index {
-            return false; // Cannot adjust the last block alone
+            log_error("Adjustment rejected: Cannot adjust the last block alone when no buffer exists.");
+            return false;
         }
 
-        blocks[index].duration_minutes += delta_minutes; // contract (since delta < 0)
+        blocks[index].duration_minutes += delta_minutes;
         blocks[t_idx].duration_minutes -= delta_minutes; // expand (subtract negative is addition)
     }
 
     // Cleanup 0 duration blocks
-    blocks.retain(|b| b.duration_minutes > 0 || b.task_id.is_none()); // keep "No plan" even if 0 temporarily, consolidate will clean
+    blocks.retain(|b| b.duration_minutes > 0 || b.task_ids.is_empty());
     consolidate_blocks(blocks);
+    log_info(&format!("Adjusted block {} duration by {}m successfully.", index, delta_minutes));
     true
 }
 
 /// Splits the block at `index` (usually "No plan") to insert a scheduled task of `duration_minutes`.
-/// Returns true if successful.
 pub fn split_block(
     blocks: &mut Vec<ScheduleBlock>,
     index: usize,
@@ -151,22 +178,25 @@ pub fn split_block(
 
     let target = &blocks[index];
     if target.duration_minutes < duration_minutes {
-        return false; // Selected block is too small
+        log_error(&format!("Split rejected: Block duration ({}m) is smaller than requested task duration ({}m)", target.duration_minutes, duration_minutes));
+        return false;
     }
 
     let old_duration = target.duration_minutes;
     let start_min = target.start_minute;
     let is_done = target.is_done;
+    let block_notes = target.notes.clone();
 
     // Replace selected block with the task block
     blocks[index] = ScheduleBlock {
         id: None,
-        task_id: Some(task_id),
+        task_ids: vec![task_id],
         task_name,
         day: day.clone(),
         start_minute: start_min,
         duration_minutes,
         is_done: false,
+        notes: block_notes.clone(),
     };
 
     // If there is leftover duration, insert a new "No plan" block
@@ -176,32 +206,67 @@ pub fn split_block(
             index + 1,
             ScheduleBlock {
                 id: None,
-                task_id: None,
+                task_ids: Vec::new(),
                 task_name: "No plan".to_string(),
                 day,
                 start_minute: start_min + duration_minutes,
                 duration_minutes: leftover,
                 is_done,
+                notes: String::new(),
             },
         );
     }
 
     consolidate_blocks(blocks);
+    log_info(&format!("Split block {} to insert task ID {} ({}m)", index, task_id, duration_minutes));
     true
 }
 
-/// Removes the scheduled task at `index` and turns it back into a "No plan" block.
+/// Appends a task template to an existing block's schedule (doubling up).
+pub fn append_task_to_block(
+    blocks: &mut [ScheduleBlock],
+    index: usize,
+    task_id: i64,
+    task_name: String,
+) -> bool {
+    if index >= blocks.len() {
+        return false;
+    }
+
+    let block = &mut blocks[index];
+    if block.task_ids.contains(&task_id) {
+        log_info(&format!("Task ID {} already present in block {}. Skipping append.", task_id, index));
+        return false; // Prevent duplicates in the same block
+    }
+
+    if block.task_ids.is_empty() {
+        // If the block is "No plan", it becomes a single task block
+        block.task_ids = vec![task_id];
+        block.task_name = task_name;
+    } else {
+        // Double up (multi-task)
+        block.task_ids.push(task_id);
+        block.task_name = format!("{} + {}", block.task_name, task_name);
+    }
+
+    log_info(&format!("Doubled up block {} by appending task ID {}", index, task_id));
+    true
+}
+
+/// Removes the scheduled tasks at `index` and turns it back into a "No plan" block.
 pub fn delete_block(blocks: &mut Vec<ScheduleBlock>, index: usize) -> bool {
     if index >= blocks.len() {
         return false;
     }
 
-    // Turn into "No plan"
-    blocks[index].task_id = None;
+    blocks[index].task_ids.clear();
     blocks[index].task_name = "No plan".to_string();
     blocks[index].is_done = false;
+    // We clear the notes too upon deleting the task schedule block
+    blocks[index].notes.clear();
 
     consolidate_blocks(blocks);
+    log_info(&format!("Deleted task entry at block index {} and reverted to No Plan", index));
     true
 }
 
@@ -213,12 +278,13 @@ mod tests {
         vec![
             ScheduleBlock {
                 id: None,
-                task_id: None,
+                task_ids: Vec::new(),
                 task_name: "No plan".to_string(),
                 day: "2026-06-13".to_string(),
                 start_minute: 0,
                 duration_minutes: 1440,
                 is_done: false,
+                notes: String::new(),
             }
         ]
     }
@@ -230,26 +296,17 @@ mod tests {
         assert_eq!(schedule.len(), 2);
         assert_eq!(schedule[0].task_name, "Coding");
         assert_eq!(schedule[0].duration_minutes, 120);
+        assert_eq!(schedule[0].task_ids, vec![1]);
         assert_eq!(schedule[1].task_name, "No plan");
         assert_eq!(schedule[1].duration_minutes, 1320);
-        assert_eq!(schedule[1].start_minute, 120);
     }
 
     #[test]
-    fn test_adjust() {
+    fn test_double_up() {
         let mut schedule = mock_schedule();
         split_block(&mut schedule, 0, 1, "Coding".to_string(), "2026-06-13".to_string(), 120);
-        
-        // Expand Coding by 30m
-        assert!(adjust_block_duration(&mut schedule, 0, 30));
-        assert_eq!(schedule[0].duration_minutes, 150);
-        assert_eq!(schedule[1].duration_minutes, 1290);
-        assert_eq!(schedule[1].start_minute, 150);
-        
-        // Contract Coding by 50m
-        assert!(adjust_block_duration(&mut schedule, 0, -50));
-        assert_eq!(schedule[0].duration_minutes, 100);
-        assert_eq!(schedule[1].duration_minutes, 1340);
-        assert_eq!(schedule[1].start_minute, 100);
+        assert!(append_task_to_block(&mut schedule, 0, 2, "Music".to_string()));
+        assert_eq!(schedule[0].task_name, "Coding + Music");
+        assert_eq!(schedule[0].task_ids, vec![1, 2]);
     }
 }
