@@ -15,6 +15,8 @@ pub struct LockstepApp {
     new_task_duration: String,
     new_task_category: String,
     new_task_notes: String,
+    new_task_category_select: String,
+    selected_task_category_select: String,
     error_message: Option<String>,
     
     // Notes editing buffer for the selected template task
@@ -58,6 +60,8 @@ impl LockstepApp {
             new_task_duration: "30".to_string(),
             new_task_category: String::new(),
             new_task_notes: String::new(),
+            new_task_category_select: "Unassigned".to_string(),
+            selected_task_category_select: "Unassigned".to_string(),
             error_message: None,
             selected_task_notes_buf: String::new(),
             selected_task_category_buf: String::new(),
@@ -73,6 +77,7 @@ impl LockstepApp {
             if sel_idx < self.tasks.len() {
                 self.selected_task_notes_buf = self.tasks[sel_idx].notes.clone();
                 self.selected_task_category_buf = self.tasks[sel_idx].category.clone();
+                self.selected_task_category_select = self.tasks[sel_idx].category.clone();
             } else {
                 self.selected_task_index = None;
             }
@@ -258,16 +263,15 @@ impl LockstepApp {
                     ui.style_mut().visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, stroke_color);
 
                     ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
+                        // Row 1: Time, Cursor, checkbox, and split/delete actions
+                        ui.horizontal_wrapped(|ui| {
                             // Time Indicator
-                            ui.label(egui::RichText::new(format!("{} - {}", start_str, end_str)).code().color(egui::Color32::WHITE));
+                            ui.label(egui::RichText::new(format!("{} - {} ({}m)", start_str, end_str, duration)).code().color(egui::Color32::WHITE));
                             
                             // Active Cursor Marker
                             if is_active_now {
                                 ui.label(egui::RichText::new(" [ NOW ] ").strong().color(egui::Color32::WHITE));
                             }
-
-                            ui.separator();
 
                             // Checkbox for status
                             if is_task {
@@ -287,7 +291,7 @@ impl LockstepApp {
                                 ui.label(egui::RichText::new(&block_name).color(egui::Color32::DARK_GRAY));
                             }
 
-                            // Controls align right
+                            // Controls align right for main actions
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if is_task {
                                     // Delete Task Block
@@ -302,8 +306,6 @@ impl LockstepApp {
                                     if let Some(sel_idx) = self.selected_task_index {
                                         if sel_idx < self.tasks.len() {
                                             let task = &self.tasks[sel_idx];
-                                            
-                                            // Split Insert Button
                                             let label = format!("Insert {}", task.name);
                                             if ui.button(label).clicked() {
                                                 let duration_to_split = std::cmp::min(task.default_duration, duration);
@@ -342,61 +344,60 @@ impl LockstepApp {
                                         }
                                     }
                                 }
-
-                                // Increments: -60m, -30m, -5m, +5m, +30m, +60m
-                                ui.horizontal(|ui| {
-                                    if ui.button("+60").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 60) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot expand by 60m: downstream buffer limit reached.".to_string());
-                                        }
-                                    }
-                                    if ui.button("+30").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 30) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot expand by 30m: downstream buffer limit reached.".to_string());
-                                        }
-                                    }
-                                    if ui.button("+5").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 5) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot expand by 5m: downstream buffer limit reached.".to_string());
-                                        }
-                                    }
-                                    if ui.button("-5").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -5) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
-                                        }
-                                    }
-                                    if ui.button("-30").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -30) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
-                                        }
-                                    }
-                                    if ui.button("-60").clicked() {
-                                        if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -60) {
-                                            trigger_db_save = true;
-                                            action_taken = true;
-                                        } else {
-                                            self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
-                                        }
-                                    }
-                                });
-
-                                ui.label(format!("{}m", duration));
                             });
+                        });
+
+                        // Row 2: Increments wrapping beautifully
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(egui::RichText::new("Adjust:").size(11.0).color(egui::Color32::GRAY));
+                            if ui.button("-60m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -60) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
+                                }
+                            }
+                            if ui.button("-30m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -30) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
+                                }
+                            }
+                            if ui.button("-5m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, -5) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot shrink: block duration must be greater than zero.".to_string());
+                                }
+                            }
+                            if ui.button("+5m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 5) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot expand by 5m: downstream buffer limit reached.".to_string());
+                                }
+                            }
+                            if ui.button("+30m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 30) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot expand by 30m: downstream buffer limit reached.".to_string());
+                                }
+                            }
+                            if ui.button("+60m").clicked() {
+                                if stack::adjust_block_duration(&mut self.schedule_blocks, idx, 60) {
+                                    trigger_db_save = true;
+                                    action_taken = true;
+                                } else {
+                                    self.error_message = Some("Cannot expand by 60m: downstream buffer limit reached.".to_string());
+                                }
+                            }
                         });
 
                         // Expandable block notes input to keep timeline uncluttered
@@ -440,26 +441,66 @@ impl LockstepApp {
 
         // Create New Task Form
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Create Template").strong());
+            ui.label(egui::RichText::new("Create Task Template").strong());
+            
+            // Row 1: Name and Duration
             ui.horizontal(|ui| {
                 ui.label("Name:");
                 ui.text_edit_singleline(&mut self.new_task_name);
                 ui.label("Min:");
                 ui.add(egui::TextEdit::singleline(&mut self.new_task_duration).desired_width(35.0));
             });
+
+            // Row 2: Category Selector
             ui.horizontal(|ui| {
                 ui.label("Category:");
-                ui.text_edit_singleline(&mut self.new_task_category);
+                
+                let mut existing_categories: Vec<String> = self.tasks.iter()
+                    .map(|t| t.category.clone())
+                    .filter(|c| !c.is_empty() && c != "Unassigned")
+                    .collect();
+                existing_categories.sort();
+                existing_categories.dedup();
+                existing_categories.insert(0, "Unassigned".to_string());
+                existing_categories.push("[ New Category ]".to_string());
+                
+                egui::ComboBox::from_id_salt("new_task_category_combo")
+                    .selected_text(&self.new_task_category_select)
+                    .show_ui(ui, |ui| {
+                        for cat in &existing_categories {
+                            ui.selectable_value(&mut self.new_task_category_select, cat.clone(), cat);
+                        }
+                    });
+            });
+
+            // Row 3: New category input text field (shown only if [ New Category ] is selected)
+            if self.new_task_category_select == "[ New Category ]" {
+                ui.horizontal(|ui| {
+                    ui.label("New Category Name:");
+                    ui.text_edit_singleline(&mut self.new_task_category);
+                });
+            }
+
+            // Row 4: Notes
+            ui.horizontal(|ui| {
                 ui.label("Notes:");
                 ui.text_edit_singleline(&mut self.new_task_notes);
-                if ui.button("Create").clicked() {
+            });
+
+            // Row 5: Create template button
+            ui.vertical_centered_justified(|ui| {
+                if ui.button("Create Template").clicked() {
                     if !self.new_task_name.trim().is_empty() {
                         if let Ok(dur) = self.new_task_duration.trim().parse::<i32>() {
                             if dur > 0 {
-                                let cat = if self.new_task_category.trim().is_empty() {
-                                    "Unassigned"
+                                let cat = if self.new_task_category_select == "[ New Category ]" {
+                                    if self.new_task_category.trim().is_empty() {
+                                        "Unassigned"
+                                    } else {
+                                        self.new_task_category.trim()
+                                    }
                                 } else {
-                                    self.new_task_category.trim()
+                                    self.new_task_category_select.as_str()
                                 };
                                 if let Err(e) = self.db.add_task(
                                     &self.new_task_name,
@@ -472,6 +513,7 @@ impl LockstepApp {
                                     self.new_task_name.clear();
                                     self.new_task_duration = "30".to_string();
                                     self.new_task_category.clear();
+                                    self.new_task_category_select = "Unassigned".to_string();
                                     self.new_task_notes.clear();
                                     self.reload_all();
                                 }
@@ -519,6 +561,7 @@ impl LockstepApp {
                             self.selected_task_index = Some(idx);
                             self.selected_task_notes_buf = task.notes.clone();
                             self.selected_task_category_buf = task.category.clone();
+                            self.selected_task_category_select = task.category.clone();
                         }
                     }
                 }
@@ -537,17 +580,54 @@ impl LockstepApp {
                 
                 ui.group(|ui| {
                     ui.label(egui::RichText::new(format!("Selected Template: {}", task_name)).strong());
+                    
+                    // Row 1: Category dropdown selection
                     ui.horizontal(|ui| {
                         ui.label("Category:");
-                        ui.text_edit_singleline(&mut self.selected_task_category_buf);
-                        if self.selected_task_category_buf != task_category {
-                            if ui.button("Save").clicked() {
-                                let _ = self.db.update_task_category(task_id, &self.selected_task_category_buf);
-                                should_reload = true;
-                            }
-                        }
+                        
+                        let mut existing_categories: Vec<String> = self.tasks.iter()
+                            .map(|t| t.category.clone())
+                            .filter(|c| !c.is_empty() && c != "Unassigned")
+                            .collect();
+                        existing_categories.sort();
+                        existing_categories.dedup();
+                        existing_categories.insert(0, "Unassigned".to_string());
+                        existing_categories.push("[ New Category ]".to_string());
+                        
+                        egui::ComboBox::from_id_salt("selected_task_category_combo")
+                            .selected_text(&self.selected_task_category_select)
+                            .show_ui(ui, |ui| {
+                                for cat in &existing_categories {
+                                    ui.selectable_value(&mut self.selected_task_category_select, cat.clone(), cat);
+                                }
+                            });
                     });
                     
+                    // Row 2: Custom Category Text Field
+                    if self.selected_task_category_select == "[ New Category ]" {
+                        ui.horizontal(|ui| {
+                            ui.label("New Category Name:");
+                            ui.text_edit_singleline(&mut self.selected_task_category_buf);
+                        });
+                    }
+
+                    // Save category if modified
+                    let target_cat = if self.selected_task_category_select == "[ New Category ]" {
+                        self.selected_task_category_buf.trim().to_string()
+                    } else {
+                        self.selected_task_category_select.clone()
+                    };
+
+                    if target_cat != task_category && !target_cat.is_empty() {
+                        ui.horizontal(|ui| {
+                            if ui.button("Save Category").clicked() {
+                                let _ = self.db.update_task_category(task_id, &target_cat);
+                                should_reload = true;
+                            }
+                        });
+                    }
+                    
+                    // Row 3: Notes
                     ui.label("Notes:");
                     ui.text_edit_multiline(&mut self.selected_task_notes_buf);
                     if self.selected_task_notes_buf != task_notes {
